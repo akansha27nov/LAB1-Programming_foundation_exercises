@@ -65,7 +65,7 @@ def check_sensor_reading(sensor, house_mode):
             return create_alert(sensor["id"], "Equiment failure" + sensor["location"])
         elif value < 35:
             return create_alert(sensor["id"], "Frozen pipe risk " + sensor["location"])
-        elif house_mode == "home" and (value > 65 and value < 75):
+        elif house_mode == "home" and (value < 65 or value > 75):
             return create_alert(sensor["id"], "Temperature outside comfort zone " + sensor["location"])
     
     elif sensor_type == "smoke":
@@ -186,7 +186,7 @@ class Sensor_HomeGuard:
                 return True
             elif self.current_value > 95:
                 return True
-            elif house_mode == "home" and (self.current_value > 65 and self.current_value < 75):
+            elif house_mode == "home" and (self.current_value < 65 or self.current_value > 75):
                 return True
         elif self.type == "smoke":
             return self.current_value
@@ -230,7 +230,7 @@ for sensor in sensors:
 def format_time():
     return datetime.now().strftime("%H:%M:%S")
 
-def display_reading(sensor):
+def display_reading(sensor, house_mode):
     if sensor.type == "motion":
         status = "Activity detected" if sensor.current_value else "No activity"
         print(f"[READING] {sensor.location} Motion: {status}")
@@ -241,26 +241,26 @@ def display_reading(sensor):
 
     elif sensor.type == "temperature":
         if sensor.current_value > 95:
-            condition = "Critical"
+            condition = "Critical (Too Hot)"
         elif sensor.current_value < 35:
-            condition = "Warning"
+            condition = "Warning (Freezing Risk)"
+        elif house_mode == "home" and (sensor.current_value < 65 or sensor.current_value > 75):
+            condition = "Uncomfortable"
         else:
             condition = "Normal"
 
-        print(
-            f"[READING] {sensor.location} Temperature: "
-            f"{sensor.current_value}°F ({condition})"
-        )
+        print(f"[READING] {sensor.location} Temperature: {sensor.current_value}°F ({condition})")
 
     elif sensor.type == "smoke":
         status = "SMOKE DETECTED" if sensor.current_value else "CLEAR"
         print(f"[READING] {sensor.location} Smoke: {status}")
 
 def generate_alert_message(sensor, house_mode):
-    if sensor.type == "motion" and house_mode == "away":
+    if sensor.type == "motion" and sensor.current_value and house_mode == "away":
         return "SECURITY: Motion detected while in AWAY mode!"
 
-    elif sensor.type == "door" and house_mode == "away":
+    # FIX: Added 'and sensor.current_value == "open"'
+    elif sensor.type == "door" and sensor.current_value == "open" and house_mode == "away":
         return "SECURITY: Front Door opened while in AWAY mode!"
 
     elif sensor.type == "temperature":
@@ -268,6 +268,8 @@ def generate_alert_message(sensor, house_mode):
             return "SAFETY: High temperature detected!"
         elif sensor.current_value < 35:
             return "SAFETY: Freezing temperature risk!"
+        elif house_mode == "home" and (sensor.current_value < 65 or sensor.current_value > 75):
+            return "COMFORT: Temperature outside comfort zone!"
 
     elif sensor.type == "smoke" and sensor.current_value:
         return "SAFETY: Smoke detected!"
@@ -288,21 +290,29 @@ def run_homeguard():
     print("=== HomeGuard Security System ===")
     print(f"Time: {format_time()}")
     print(f"Mode: {house_mode.upper()}\n")
-
-
+    
     # Run multiple monitoring cycles
     for cycle in range(3):
         print(f"Time: {format_time()}")
+        
+        cycle_alerts = [] # Track which sensors tripped this cycle
+        
         for sensor in sensors:
             sensor.read()
-            display_reading(sensor)
+            display_reading(sensor, house_mode) # Pass house_mode here
             message = generate_alert_message(sensor, house_mode)
 
             if message:
-                alert = create_alert(sensor.id,message)
-                print(f"[ALERT!] " f"{alert['message']}")
-                print(f"[LOG] [{format_time()}]" "Sending notification to homeowner...")
+                alert = create_alert(sensor.id, message)
+                print(f"[ALERT!] {alert['message']}")
+                print(f"[LOG] [{format_time()}] Sending notification to homeowner...")
                 log_event(alert)
+                cycle_alerts.append(sensor.type) # Log the tripped sensor type
+        
+        # Stretch Goal Logic: Multi-sensor break in
+        if house_mode == "away" and "door" in cycle_alerts and "motion" in cycle_alerts:
+             print("\n[CRITICAL ALERT!] CONFIRMED BREAK-IN: Door opened and motion detected simultaneously!")
+             
         print()
 
 run_homeguard()
@@ -320,7 +330,7 @@ def run_test(system_mode):
     ]
     for sensor in sensors:
         sensor.read()
-        display_reading(sensor)
+        display_reading(sensor, system_mode)
         message = generate_alert_message(sensor, system_mode)
         if message:
             alert = create_alert(sensor.id, message)
